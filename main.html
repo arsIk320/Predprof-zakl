@@ -1,0 +1,96 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Марсианская карта</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .api-control { margin-bottom: 20px; }
+        input[type="text"] { padding: 8px; width: 300px; margin-right: 10px; }
+        button { padding: 10px; margin-right: 10px; cursor: pointer; }
+        #mapImage { border: 1px solid #ccc; margin-top: 20px; max-width: 800px; }
+        .status { margin-top: 20px; padding: 10px; background: #f0f0f0; }
+        .error { color: #dc3545; padding: 10px; border: 1px solid #dc3545; margin-top: 10px; display: none; }
+    </style>
+</head>
+<body>
+    <h1>Карта Марсианской поверхности</h1>
+
+    <div class="api-control">
+        <input type="text" id="apiUrl" placeholder="Введите URL API" value="https://olimp.miet.ru/ppo_it/api">
+        <button onclick="updateApiUrl()">Обновить API</button>
+    </div>
+
+    <div class="controls">
+        <button onclick="loadMap()">Базовая карта</button>
+        <button onclick="loadMapWithModules()">С модулями</button>
+        <button onclick="loadMapWithStations()">Со станциями</button>
+        <button onclick="loadMapWithCoverage()">С зонами покрытия</button>
+    </div>
+
+    <img id="mapImage" src="" alt="Карта загружается...">
+
+    <div class="status">
+        <h3>Статистика:</h3>
+        <p>Купер: <span id="cooperCount">0</span> (<span id="cooperPrice">...</span> BC/шт)</p>
+        <p>Энгель: <span id="engelCount">0</span> (<span id="engelPrice">...</span> BC/шт)</p>
+        <p>Общая стоимость: <span id="totalCost">0</span> BC</p>
+        <div id="errorMessage" class="error"></div>
+    </div>
+
+    <script>
+        function updateImage(endpoint) {
+            const timestamp = new Date().getTime();
+            document.getElementById('mapImage').src = `${endpoint}?t=${timestamp}`;
+            updateStats();
+        }
+
+        function loadMap() { updateImage('/map') }
+        function loadMapWithModules() { updateImage('/map/modules') }
+        function loadMapWithStations() { updateImage('/map/stations') }
+        function loadMapWithCoverage() { updateImage('/map/stations/coverage') }
+
+        function updateStats() {
+            fetch('/stations_info')
+                .then(response => {
+                    if (!response.ok) throw new Error('Ошибка сервера');
+                    return response.json();
+                })
+                .then(data => {
+                    document.getElementById('cooperCount').textContent = data.cooper;
+                    document.getElementById('engelCount').textContent = data.engel;
+                    document.getElementById('totalCost').textContent = data.total_cost;
+                    document.getElementById('cooperPrice').textContent = data.prices.cooper;
+                    document.getElementById('engelPrice').textContent = data.prices.engel;
+                    document.getElementById('errorMessage').style.display = 'none';
+                })
+                .catch(error => {
+                    document.getElementById('errorMessage').textContent = `Ошибка: ${error.message}`;
+                    document.getElementById('errorMessage').style.display = 'block';
+                });
+        }
+
+        function updateApiUrl() {
+            const url = document.getElementById('apiUrl').value;
+            fetch('/update_api', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({url: url})
+            })
+            .then(response => {
+                if(!response.ok) throw new Error('Ошибка обновления');
+                location.reload();
+            })
+            .catch(error => {
+                document.getElementById('errorMessage').textContent = `Ошибка: ${error.message}`;
+                document.getElementById('errorMessage').style.display = 'block';
+            });
+        }
+
+        window.onload = function() {
+            loadMap();
+            updateStats();
+        }
+    </script>
+</body>
+</html>
