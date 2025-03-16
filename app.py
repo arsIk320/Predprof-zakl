@@ -1,6 +1,6 @@
 
 import matplotlib
-from flask import Flask, Response
+from flask import Flask, Response, render_template
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -8,35 +8,77 @@ import io
 import requests
 import matplotlib
 from scipy.ndimage import maximum_filter
+from flask_sqlalchemy import SQLAlchemy
 
 matplotlib.use('agg')
 
 app = Flask(__name__)
 
+
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///coordinates.db'
+app.secret_key = "хочувыигратьпредпроф"
+db = SQLAlchemy(app)
+
+
+class Coordinates(db.Model):
+    def init(self, x, y):
+        self.x = x
+        self.y = y
+
+    id = db.Column(db.Integer, primary_key=True)
+    x = db.Column(db.Integer, nullable=False)
+    y = db.Column(db.Integer, nullable=False)
+
+with app.app_context():
+    db.create_all()
+
 def fetch_tile(api_url):
     response = requests.get(api_url)
     return response.json()["message"]["data"]
 
-import numpy as np
-
 def assemble_map(api_url):
     height_map = np.zeros((256, 256), dtype=int)
-    
-    tile_indices = [(i, j) for i in range(4) for j in range(4)]
+    placed_tiles = {}
 
-    for i, j in tile_indices:
-        if (i, j) == (1, 1): 
-            
-            tile = np.full((64, 64), 255, dtype=int)
-        else:
-            
-            tile = fetch_tile(api_url)
-            tile = np.array(tile).reshape(64, 64)
-        
-        height_map[i * 64:(i + 1) * 64, j * 64:(j + 1) * 64] = tile
+    def fetch_and_place_tile(i, j):
+        max_attempts = 10  
+        attempts = 0
+
+        while attempts < max_attempts:
+            tile_data = fetch_tile(api_url)
+            tile = np.array(tile_data).reshape(64, 64)
+
+            if i > 0:
+                top_neighbor = placed_tiles.get((i - 1, j))
+                if top_neighbor is not None and not np.array_equal(tile[0, :], top_neighbor[-1, :]):
+                    attempts += 1
+                    continue
+
+            if j > 0:
+                left_neighbor = placed_tiles.get((i, j - 1))
+                if left_neighbor is not None and not np.array_equal(tile[:, 0], left_neighbor[:, -1]):
+                    attempts += 1
+                    continue
+
+            height_map[i * 64:(i + 1) * 64, j * 64:(j + 1) * 64] = tile
+            placed_tiles[(i, j)] = tile
+            return
+
+        raise ValueError(f"Не удалось разместить тайл в позиции ({i}, {j}) после {max_attempts} попыток.")
+
+    for i in range(4):
+        for j in range(4):
+            fetch_and_place_tile(i, j)
+
+    with app.app_context():
+        for i in range(height_map.shape[0]):
+            for j in range(height_map.shape[1]):
+                new_coords = Coordinates(x=j, y=i)
+                db.session.add(new_coords)
+                db.session.flush()
+        db.session.commit()
 
     return height_map
-
 
 def find_peaks(height_map, size=32):
 
@@ -72,14 +114,14 @@ def plot_3d_map(height_map, modules=None, stations=None, show_coverage=False):
     if modules:
         for module in modules:
             ax.scatter(module[1], module[0], height_map[module[0], module[1]],
-                       c='green', marker='x', s=100, label='Модуль')
+                    c='green', marker='x', s=100, label='Модуль')
 
     if stations:
         for station in stations:
             color = 'blue' if station['type'] == 'Купер' else 'red'
             ax.scatter(station['position'][1], station['position'][0],
-                       height_map[station['position'][0], station['position'][1]],
-                       c=color, s=100, label=station['type'])
+                    height_map[station['position'][0], station['position'][1]],
+                    c=color, s=100, label=station['type'])
             if show_coverage:
                 u = np.linspace(0, 2 * np.pi, 100)
                 v = np.linspace(0, np.pi, 100)
@@ -120,12 +162,31 @@ def get_map_with_stations_coverage():
     buf = plot_3d_map(height_map, stations=stations, show_coverage=True)
     return Response(buf.getvalue(), mimetype='image/png')
 
+@app.route('/main')
+def main():
+    return render_template('main.html')
+
+def fetch_and_process_data(url):
+    response = requests.get(url)
+    data = response.json()
+    message = data.get('message', {})
+    sender_coords = message.get('sender', [])
+    listener_coords = message.get('listener', [])
+    modules = [sender_coords, listener_coords]
+
+    prices = {
+        'cuper_price': message.get('price', [])[0],
+        'engel_price': message.get('price', [])[1]
+    }
+    return modules, prices
+
 if __name__ == '__main__':
     api_url = "https://olimp.miet.ru/ppo_it/api"
 
     height_map = assemble_map(api_url)
+    modules = fetch_and_process_data("https://olimp.miet.ru/ppo_it/api/coords")[0]
 
     peaks = find_peaks(height_map)
     stations = place_stations(peaks, height_map)
 
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    app.run(host="0.0.0.0", port=6969, debug=True)
